@@ -228,14 +228,16 @@ class Seq2Seq(nn.Module):
         outputs = torch.zeros(max_len, batch_size, trg_vocab_size).to(self.device)
         
         #last hidden state of the encoder is used as the initial hidden state of the decoder
+        # src = torch.tensor(src).to(self.device).unsqueeze(1)
         enc_out, hidden, cell = self.encoder(src)
         
         #first input to the decoder is the <sos> tokens
-        input_ = trg[BOS_IDX]
+        #input_ = trg[BOS_IDX]
+        input_ = trg[0, :]
         
         for t in range(1, max_len):
             
-            output, hidden, cell = self.decoder(input_, enc_out, hidden, cell) #TODO pass state and input throw decoder 
+            output, hidden, cell = self.decoder(input_, hidden, cell, encoder_output=enc_out) #TODO pass state and input throw decoder 
             outputs[t] = output
             teacher_force = random.random() < teacher_forcing_ratio
             top1 = output.max(1)[1]
@@ -250,15 +252,15 @@ class Seq2Seq(nn.Module):
         outputs = []
         
         #last hidden state of the encoder is used as the initial hidden state of the decoder
-        src = torch.tensor(src).to(self.device)
+        src = torch.tensor(src).to(self.device).unsqueeze(1)
         enc_out, hidden, cell = self.encoder(src) # TODO pass src throw encoder
         
         #first input to the decoder is the <sos> tokens
-        input_ = trg[BOS_IDX]# TODO trg[idxs]
+        input_ = torch.tensor([SRC.vocab.stoi['<sos>']] * src.shape[1]).to(device) # TODO trg[idxs]
         
         for t in range(1, self.max_len):
             
-            output, hidden, cell = self.decoder(input_, enc_out, hidden, cell) #TODO pass state and input throw decoder 
+            output, hidden, cell = self.decoder(input_, hidden, cell, enc_out) #TODO pass state and input throw decoder 
             top1 = output.max(1)[1]
             outputs.append(top1)
             input_ = (top1)
@@ -348,11 +350,11 @@ def evaluate(model, iterator, criterion):
         
     return epoch_loss / len(iterator)
 
-max_epochs = 100
+max_epochs = 1
 CLIP = 1
 
 # TODO
-optimizer = optim.Adam(model.parameters(), lr = 1e-4)
+optimizer = optim.Adam(model.parameters(), lr = 1e-3)
 criterion = nn.CrossEntropyLoss(ignore_index = PAD_IDX)
 
 best_valid_loss = float('inf')
@@ -370,4 +372,42 @@ for epoch in range(max_epochs):
     
     print('Epoch: {} \n Train Loss {}  Val loss {}:'.format(epoch, train_loss, valid_loss))
     print('Train Perplexity {}  Val Perplexity {}:'.format(np.exp(train_loss), np.exp(valid_loss)))
+
+
+test_loss = evaluate(model, test_iterator, criterion)
+
+print('| Test Loss: {} Test PPL:{}|'.format(test_loss, np.exp(test_loss)))
+
+EOS_IDX = SRC.vocab.stoi['<eos>']
+
+def translate(sentence):
+    """
+    function that uses .translate() method of the model to translate german sentence into english
+    params:
+        sentence: tokenized gernam sentence
+    """
+    sentence = sentence.lower()
+    sent_vec = [SRC.vocab.stoi[token] for token in sentence.split()]
+    
+    translation_idx = model.translate(torch.tensor(sent_vec))
+
+    res = []
+    for t in translation_idx:
+        if t[0] != EOS_IDX:
+            # print(TRG.vocab.itos[t[0]], end=' ')
+            res.append(TRG.vocab.itos[t[0]])
+
+        else:
+            break
+
+    return ' '.join(res)
+
+def translate_b(source_batch):
+  hypothesis = []
+  for sent in source_batch:
+    hypothesis.append(translate(sent))
+
+  return hypothesis
+
+print(translate_b("ein klein apfel"))
 
