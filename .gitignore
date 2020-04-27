@@ -1,0 +1,11 @@
+.data/multi30k/test2016.de
+.data/multi30k/test2016.en
+.data/multi30k/test2016.fr
+.data/multi30k/train.de
+.data/multi30k/train.en
+.data/multi30k/training.tar.gz
+.data/multi30k/mmt_task1_test2016.tar.gz
+.data/multi30k/val.de
+.data/multi30k/val.en
+.data/multi30k/validation.tar.gz
+.vscode/settings.json
