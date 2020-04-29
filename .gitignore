@@ -9,3 +9,4 @@
 .data/multi30k/val.en
 .data/multi30k/validation.tar.gz
 .vscode/settings.json
+model.pt
