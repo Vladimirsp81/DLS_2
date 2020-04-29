@@ -87,7 +87,7 @@ class Encoder(nn.Module):
         self.hid_dim = hid_dim
         self.n_layers = n_layers
 
-        self.embedding = nn.Embedding(input_dim, emb_dim)
+        self.embedding = nn.Embedding(self.input_dim, self.emb_dim)
  
         self.rnn = nn.LSTM(self.emb_dim, self.hid_dim, self.n_layers)
         
@@ -104,7 +104,6 @@ class Encoder(nn.Module):
         outputs, (hidden, cell) = self.rnn(embedded)
         # [Attention return is for lstm, but you can also use gru]
         return outputs, hidden, cell
-
 #===========================================================Decoder
 
 class Attention(nn.Module):
@@ -115,20 +114,33 @@ class Attention(nn.Module):
         self.hidden_size = hidden_size
 
         
-        #<YOUR CODE HERE>
+        if self.method == 'general':
+          self.attn = nn.Linear(self.hidden_size, self.hidden_size)
+        elif self.method == 'concat':
+          self.attn = nn.Linear(self.hidden_size * 2, self.hidden_size)
+          self.v = nn.Parameter(torch.FloatTensor(hidden_size)) # Назначаем обучаемый параметр
         
     def dot_score(self, rnn_output, encoder_outputs):
+      if self.method == 'dot':
+        return torch.sum(rnn_output * encoder_outputs, dim=2)
 
-          return torch.sum(rnn_output * encoder_outputs, dim=2)
+      elif self.method == 'general':
+        energy = self.attn(encoder_outputs)
+        return torch.sum(rnn_output * energy, dim=2)
+
+      elif self.method == 'concat':
+        # конкатенируем rnn_output и encoder_outputs, применяем линейную трансформацию и регуляризацию
+        energy = (self.attn(torch.cat((rnn_output.expand(encoder_output.size(0), -1, -1), encoder_outputs), 2))).tanh()
+        
+        return torch.sum(self.v * energy, dim=2)
 
     def forward(self, rnn_output, encoder_outputs, seq_len=None):
 
       score = self.dot_score(rnn_output, encoder_outputs)
 
-      # Транспонируем наш тензор размером seq_len*batch_size -> batch_size*seq_len
-      #attn_weights = score
-      # Применяем softmax для нормализации и дополняем размерностью -> batch_size*1*seq_len
+      # Применяем softmax для нормализации и дополняем размерностью для возможности перемножения
       attn_weights = F.softmax(score, dim=0).unsqueeze(1)
+
       context_vector = torch.bmm(attn_weights.transpose(0,2), encoder_outputs.transpose(0,1))
 
       return context_vector
@@ -160,43 +172,32 @@ class DecoderAttn(nn.Module):
         # use code from seminar notebook as base and add attention to it
         input_ = input_.unsqueeze(0)
 
-        #1 (1 x batch_size x emb_dim)
+        # (1 x batch_size x emb_dim)
         embedded = self.embedding(input_) #1 embd over input and dropout
         embedded = self.dropout(embedded)
 
+        # Вычмляем new_hidden
         rnn_output, (new_hidden, cell) = self.rnn(embedded, (last_hidden, cell))
 
-        #1 Calculating Alignment Scores - see Attention class for the forward pass function
+        # Вычисляем вектор контекста (функция forward в Attention)
         context_vector = self.attn(rnn_output, encoder_output)
 
-        #1 Multiply attention weights to encoder outputs to get new "weighted sum" context vector
-        #1 attn_weights(context_vector)＝[batchsize,1,max_len],encoder_outputs=[max_len,batchsize,hiddensize]
-        # context_vector = context_vector.bmm(encoder_output.transpose(0, 1))
-
-        #1 Размеры context_vector = [batchsize,1,hiddensize]
-        #1 Concatenate weighted context vector and GRU output using Luong eq. 5
+        # Размеры rnn_output и context_vector -> 1*128*512 и 128*1*512. Удаляем лишние размерности
 
         rnn_output = rnn_output.squeeze(0)
         context_vector = context_vector.squeeze(1)
 
+        # Конкатенируем и увеличиваем размерность
         concat = torch.cat((context_vector, rnn_output), dim=1)
-
         concat_out = self.concat(concat)
 
-        #1 Predict next word using Luong eq. 6
+        # Делаем предсказания, возвращаем результат и состояния
         prediction = self.out(concat_out)
-        #prediction = F.softmax(prediction, dim=1)
 
         return prediction, new_hidden, cell
 
     def initHidden(self):
         return torch.zeros(1, 1, self.hidden_size, device=device)
-
-
-
-
-        # # Return output and final hidden state
-        # return output, hidden
 
 #=======================================================Seq2Seq module
 
@@ -228,11 +229,10 @@ class Seq2Seq(nn.Module):
         outputs = torch.zeros(max_len, batch_size, trg_vocab_size).to(self.device)
         
         #last hidden state of the encoder is used as the initial hidden state of the decoder
-        # src = torch.tensor(src).to(self.device).unsqueeze(1)
+        # пропускаем источник через энкодер
         enc_out, hidden, cell = self.encoder(src)
         
         #first input to the decoder is the <sos> tokens
-        #input_ = trg[BOS_IDX]
         input_ = trg[0, :]
         
         for t in range(1, max_len):
@@ -287,10 +287,10 @@ iterators = BucketIterator.splits((train_data, valid_data, test_data),
 train_iterator, valid_iterator, test_iterator = iterators
 
 enc = Encoder(input_dim = input_dim, emb_dim = src_embd_dim, hid_dim=hidden_dim,
-              n_layers=num_layers, dropout=dropout_prob).to(device)
-attn = Attention(batch_size, method='dot')
+              n_layers=num_layers, dropout=dropout_prob)
+attn = Attention(batch_size, hidden_dim, method='concat')
 dec = DecoderAttn(output_dim=output_dim, emb_dim=tgt_embd_dim, hid_dim=hidden_dim,
-                  n_layers=num_layers, attention=attn, dropout=dropout_prob).to(device)
+                  n_layers=num_layers, attention=attn, dropout=dropout_prob)
 model = Seq2Seq(enc, dec, device).to(device)
 
 print(model)
@@ -350,7 +350,7 @@ def evaluate(model, iterator, criterion):
         
     return epoch_loss / len(iterator)
 
-max_epochs = 1
+max_epochs = 10
 CLIP = 1
 
 # TODO
@@ -374,6 +374,9 @@ for epoch in range(max_epochs):
     print('Train Perplexity {}  Val Perplexity {}:'.format(np.exp(train_loss), np.exp(valid_loss)))
 
 
+model.load_state_dict(torch.load('model.pt'))
+model.eval()
+
 test_loss = evaluate(model, test_iterator, criterion)
 
 print('| Test Loss: {} Test PPL:{}|'.format(test_loss, np.exp(test_loss)))
@@ -396,18 +399,10 @@ def translate(sentence):
         if t[0] != EOS_IDX:
             # print(TRG.vocab.itos[t[0]], end=' ')
             res.append(TRG.vocab.itos[t[0]])
-
         else:
             break
 
     return ' '.join(res)
-
-def translate_b(source_batch):
-  hypothesis = []
-  for sent in source_batch:
-    hypothesis.append(translate(sent))
-
-  return hypothesis
 
 print(translate_b("ein klein apfel"))
 
